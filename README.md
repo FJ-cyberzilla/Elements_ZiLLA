@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🌦️ Cyberzilla Weather System
+# 🌦️ Cyberzilla™ Weather System
 
 ### Enterprise-Grade Weather Intelligence Platform
 
