@@ -15,10 +15,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/mattn/go-sqlite3"
+	"weather-app/internal/i18n"  
+)
 	package main
 
 import (
