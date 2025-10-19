@@ -703,6 +703,22 @@ func main() {
 	
 	if err := router.Run(":" + config.Port); err != nil {
 		agent.logger.Log("FATAL", fmt.Sprintf("Server failed: %v", err))
-		log.Fatal(err)
-	}
+		log.Fatal(err) 
+		{
+}
+// In LoadConfig(), use proper environment variable handling
+func LoadConfig() *Config {
+    encryptionKey := getEnv("ENCRYPTION_KEY", "")
+    if encryptionKey == "" {
+        log.Fatal("ENCRYPTION_KEY environment variable is required")
+    }
+    
+    return &Config{
+        Port:          getEnv("PORT", "8080"),
+        APIKey:        getEnv("WEATHER_API_KEY", ""),
+        EncryptionKey: encryptionKey,
+        CacheDuration: 15 * time.Minute,
+        AdminEmail:    "cyberzilla.systems@gmail.com",
+        AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"), ","),
+    }
 }
