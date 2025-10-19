@@ -1,0 +1,683 @@
+# .gitignore - Git ignore file
+# Cyberzilla Weather System
+# cyberzilla.systems@gmail.com
+
+# Binaries
+weather-app
+weather-app.exe
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+weather_cache.db*
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Configuration (keep .example files)
+config.yaml
+!config.example.yaml
+
+# Go specific
+vendor/
+go.sum
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build directories
+dist/
+build/
+bin/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Coverage reports
+coverage.out
+coverage.html
+*.coverprofile
+
+# Backup files
+*.backup
+*.bak
+backup/
+
+# Data directories (optional - uncomment if needed)
+# data/
+
+# Certificates
+*.pem
+*.key
+*.crt
+*.cert
+
+# Docker volumes
+docker-compose.override.yml
+
+# OS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+Desktop.ini
+$RECYCLE.BIN/
+
+# Archives
+*.zip
+*.tar.gz
+*.tar
+*.rar
+
+---
+# .github/workflows/ci.yml - Continuous Integration
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  GO_VERSION: '1.21'
+  WEATHER_API_KEY: ${{ secrets.WEATHER_API_KEY }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y sqlite3 gcc
+        go mod download
+
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Generate coverage report
+      run: go tool cover -html=coverage.out -o coverage.html
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: golangci-lint
+      uses: golangci/golangci-lint-action@v3
+      with:
+        version: latest
+        args: --timeout=5m
+
+  build:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y gcc sqlite3
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install sqlite3
+
+    - name: Build binary
+      run: |
+        CGO_ENABLED=1 go build -v -o weather-app${{ runner.os == 'Windows' && '.exe' || '' }} .
+
+    - name: Test binary
+      run: ./weather-app${{ runner.os == 'Windows' && '.exe' || '' }} --version || true
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: weather-app-${{ matrix.os }}
+        path: weather-app${{ runner.os == 'Windows' && '.exe' || '' }}
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Run Gosec Security Scanner
+      uses: securego/gosec@master
+      with:
+        args: '-no-fail -fmt sarif -out results.sarif ./...'
+
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: results.sarif
+
+---
+# .github/workflows/cd.yml - Continuous Deployment
+name: CD Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.21'
+  DOCKER_IMAGE: cyberzilla/weather-app
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push-docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v2
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v2
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v4
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v4
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build-and-push-docker
+    permissions:
+      contents: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc sqlite3
+
+    - name: Build for multiple platforms
+      run: |
+        # Linux AMD64
+        GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -o weather-app-linux-amd64 .
+        
+        # Linux ARM64
+        GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -o weather-app-linux-arm64 .
+        
+        # macOS AMD64
+        GOOS=darwin GOARCH=amd64 CGO_ENABLED=1 go build -o weather-app-darwin-amd64 .
+        
+        # macOS ARM64
+        GOOS=darwin GOARCH=arm64 CGO_ENABLED=1 go build -o weather-app-darwin-arm64 .
+        
+        # Windows AMD64
+        GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -o weather-app-windows-amd64.exe .
+
+    - name: Create archives
+      run: |
+        tar -czf weather-app-linux-amd64.tar.gz weather-app-linux-amd64 README.md LICENSE
+        tar -czf weather-app-linux-arm64.tar.gz weather-app-linux-arm64 README.md LICENSE
+        tar -czf weather-app-darwin-amd64.tar.gz weather-app-darwin-amd64 README.md LICENSE
+        tar -czf weather-app-darwin-arm64.tar.gz weather-app-darwin-arm64 README.md LICENSE
+        zip weather-app-windows-amd64.zip weather-app-windows-amd64.exe README.md LICENSE
+
+    - name: Generate changelog
+      id: changelog
+      uses: metcalfc/changelog-generator@v4.0.1
+      with:
+        myToken: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          weather-app-linux-amd64.tar.gz
+          weather-app-linux-arm64.tar.gz
+          weather-app-darwin-amd64.tar.gz
+          weather-app-darwin-arm64.tar.gz
+          weather-app-windows-amd64.zip
+        body: |
+          # Cyberzilla Weather System ${{ github.ref_name }}
+          
+          🌦️ Enterprise Weather Intelligence Platform
+          
+          ## What's Changed
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Installation
+          
+          Download the appropriate binary for your platform and run:
+          
+          ```bash
+          # Linux/macOS
+          tar -xzf weather-app-*.tar.gz
+          ./weather-app-*
+          
+          # Windows
+          unzip weather-app-windows-amd64.zip
+          weather-app-windows-amd64.exe
+          ```
+          
+          ## Docker
+          
+          ```bash
+          docker pull ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
+          docker run -p 8080:8080 -e WEATHER_API_KEY=your_key ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}:${{ github.ref_name }}
+          ```
+          
+          ## Support
+          📧 cyberzilla.systems@gmail.com
+          
+          **Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ github.event.before }}...${{ github.ref_name }}
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: production
+      url: https://weather.cyberzilla.systems
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Deploy to server via SSH
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.PROD_HOST }}
+        username: ${{ secrets.PROD_USER }}
+        key: ${{ secrets.PROD_SSH_KEY }}
+        port: ${{ secrets.PROD_PORT || 22 }}
+        script: |
+          cd /opt/cyberzilla-weather
+          docker-compose pull
+          docker-compose up -d
+          docker system prune -f
+
+    - name: Health check
+      run: |
+        sleep 10
+        curl -f https://weather.cyberzilla.systems/api/v1/health || exit 1
+
+    - name: Notify deployment
+      uses: 8398a7/action-slack@v3
+      if: always()
+      with:
+        status: ${{ job.status }}
+        text: 'Deployment to production: ${{ job.status }}'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+
+---
+# .github/workflows/codeql.yml - Code Security Analysis
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 6 AM
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: go, javascript
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v2
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+
+---
+# .github/workflows/dependency-review.yml - Dependency Security
+name: Dependency Review
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Dependency Review
+      uses: actions/dependency-review-action@v3
+      with:
+        fail-on-severity: moderate
+
+---
+# .github/workflows/auto-update.yml - Automated Dependency Updates
+name: Auto Update Dependencies
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly on Monday at 3 AM
+  workflow_dispatch:
+
+jobs:
+  update-dependencies:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Update Go dependencies
+      run: |
+        go get -u ./...
+        go mod tidy
+
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: 'chore: update dependencies'
+        title: 'Automated Dependency Update'
+        body: |
+          ## Automated Dependency Update
+          
+          This PR updates Go dependencies to their latest versions.
+          
+          Please review the changes and ensure all tests pass.
+          
+          ---
+          🤖 Generated by GitHub Actions
+        branch: auto-update-deps
+        delete-branch: true
+
+---
+# .github/workflows/performance.yml - Performance Testing
+name: Performance Testing
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc sqlite3
+        go mod download
+
+    - name: Run benchmarks
+      run: go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: benchmark.txt
+
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const benchmark = fs.readFileSync('benchmark.txt', 'utf8');
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '## Benchmark Results\n\n```\n' + benchmark + '\n```'
+          });
+
+---
+# .github/dependabot.yml - Automated Dependency Updates
+version: 2
+updates:
+  # Go dependencies
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 10
+    reviewers:
+      - "cyberzilla"
+    assignees:
+      - "cyberzilla"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "go"
+
+  # Docker dependencies
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "ci-cd"
+
+---
+# .github/PULL_REQUEST_TEMPLATE.md - PR Template
+## Description
+<!-- Describe your changes in detail -->
+
+## Type of Change
+<!-- Mark with an `x` all that apply -->
+
+- [ ] 🐛 Bug fix (non-breaking change which fixes an issue)
+- [ ] ✨ New feature (non-breaking change which adds functionality)
+- [ ] 💥 Breaking change (fix or feature that would cause existing functionality to not work as expected)
+- [ ] 📝 Documentation update
+- [ ] 🎨 Style update (formatting, renaming)
+- [ ] ♻️ Code refactoring (no functional changes)
+- [ ] ⚡ Performance improvement
+- [ ] ✅ Test update
+- [ ] 🔧 Configuration change
+- [ ] 🔒 Security fix
+
+## Testing
+<!-- Describe the tests you ran -->
+
+- [ ] Unit tests pass
+- [ ] Integration tests pass
+- [ ] Manual testing completed
+- [ ] Tested in Termux
+- [ ] Tested in Linux
+- [ ] Tested with Persian language
+
+## Checklist
+<!-- Mark with an `x` all that you have completed -->
+
+- [ ] My code follows the project's style guidelines
+- [ ] I have performed a self-review of my code
+- [ ] I have commented my code, particularly in hard-to-understand areas
+- [ ] I have made corresponding changes to the documentation
+- [ ] My changes generate no new warnings
+- [ ] I have added tests that prove my fix is effective or that my feature works
+- [ ] New and existing unit tests pass locally with my changes
+- [ ] Any dependent changes have been merged and published
+
+## Screenshots (if applicable)
+<!-- Add screenshots to help explain your changes -->
+
+## Related Issues
+<!-- Link to related issues: Fixes #123, Closes #456 -->
+
+## Additional Notes
+<!-- Any additional information about this PR -->
+
+---
+
+## 📧 Contact
+**Cyberzilla Systems**  
+Email: cyberzilla.systems@gmail.com
+
+---
+
+## ⚖️ License
+MIT License - See LICENSE file for details
