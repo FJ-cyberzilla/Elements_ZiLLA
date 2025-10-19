@@ -339,10 +339,34 @@ main() {
     echo -e "${NC}"
     
     log_info "Starting hotfix application..."
+    # Check if we're in the right directory
+check_directory() {
+    # Try to find the project root by looking for go.mod
+    if [[ ! -f "go.mod" ]]; then
+        # Check if we're in a subdirectory
+        if [[ -f "../go.mod" ]]; then
+            log_info "Found project root in parent directory, changing to it..."
+            cd ..
+        elif [[ -f "../../go.mod" ]]; then
+            log_info "Found project root in parent's parent directory, changing to it..."
+            cd ../..
+        else
+            log_error "Please run this script from the project root directory (where go.mod exists)"
+            log_error "Current directory: $(pwd)"
+            exit 1
+        fi
+    fi
     
+    if [[ ! -d "cmd" ]]; then
+        log_error "cmd/ directory not found. Please run from project root."
+        exit 1
+    fi
+    
+    log_success "Directory check passed - running from: $(pwd)"
+}
     # Execute all steps
     check_directory
-    backup_files
+    backup_files no
     create_directories
     create_i18n_package
     create_locale_files
