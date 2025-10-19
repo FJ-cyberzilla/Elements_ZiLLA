@@ -687,6 +687,7 @@ func main() {
 	router.Static("/static", "./static")
 	router.StaticFile("/", "./static/index.html")
 
+	
 	// API routes
 	api := router.Group("/api/v1")
 	{
@@ -721,4 +722,22 @@ func LoadConfig() *Config {
         AdminEmail:    "cyberzilla.systems@gmail.com",
         AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:8080,http://127.0.0.1:8080"), ","),
     }
+}
+func (a *Agent) GetWeather(location string) (*WeatherResponse, error) {
+    if location == "" {
+        return nil, fmt.Errorf("location cannot be empty")
+    }
+    
+    cacheKey := fmt.Sprintf("weather:%s", location)
+    
+    if cached, found := a.cache.Get(cacheKey); found {
+        a.logger.Log("INFO", fmt.Sprintf("Cache hit for location: %s", location))
+        return cached.(*WeatherResponse), nil
+    }
+
+    // Add timeout context
+    ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+    defer cancel()
+
+    // ... rest of the function
 }
