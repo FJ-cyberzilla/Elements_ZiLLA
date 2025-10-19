@@ -19,6 +19,109 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/mattn/go-sqlite3"
+	package main
+
+import (
+	// ... other imports
+	"path/filepath"
+	"weather-app/internal/i18n"
+)
+
+type Config struct {
+	Port           string
+	APIKey         string
+	EncryptionKey  string
+	CacheDuration  time.Duration
+	AdminEmail     string
+	AllowedOrigins []string
+	LocalesPath    string
+	DefaultLang    string
+}
+
+func LoadConfig() *Config {
+	return &Config{
+		Port:          getEnv("PORT", "8080"),
+		APIKey:        getEnv("WEATHER_API_KEY", "f807e87175ee4ff98f551941252009"),
+		EncryptionKey: getEnv("ENCRYPTION_KEY", "cyberzilla-systems-key-32bit"),
+		CacheDuration: 15 * time.Minute,
+		AdminEmail:    "cyberzilla.systems@gmail.com",
+		AllowedOrigins: []string{"*"},
+		LocalesPath:   getEnv("LOCALES_PATH", "./configs/locales"),
+		DefaultLang:   getEnv("DEFAULT_LANG", "en"),
+	}
+}
+
+// Agent struct update
+type Agent struct {
+	config    *Config
+	db        *sql.DB
+	cache     *Cache
+	apiClient *APIClient
+	logger    *Logger
+	i18n      *i18n.Bundle
+	mu        sync.RWMutex
+}
+
+func NewAgent(config *Config) *Agent {
+	// Initialize i18n
+	i18nBundle := i18n.NewBundle(config.LocalesPath, config.DefaultLang)
+	
+	agent := &Agent{
+		config:    config,
+		db:        InitDB(),
+		cache:     NewCache(),
+		apiClient: NewAPIClient(config.APIKey),
+		logger:    NewLogger(),
+		i18n:      i18nBundle,
+	}
+	agent.logger.Log("INFO", "Agent initialized successfully")
+	return agent
+}
+
+// HTTP Handlers with i18n support
+func (a *Agent) HandleWeather(c *gin.Context) {
+	location := c.Query("location")
+	lang := c.Query("lang")
+	if lang == "" {
+		lang = a.config.DefaultLang
+	}
+
+	if location == "" {
+		errorMsg := a.i18n.Translate(lang, "errors.location_required")
+		c.JSON(http.StatusBadRequest, gin.H{"error": errorMsg})
+		return
+	}
+
+	weather, err := a.GetWeather(location)
+	if err != nil {
+		a.logger.Log("ERROR", fmt.Sprintf("Weather fetch error: %v", err))
+		errorMsg := a.i18n.Translate(lang, "errors.weather_not_found")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errorMsg})
+		return
+	}
+
+	c.JSON(http.StatusOK, weather)
+}
+
+// New endpoint to get translations
+func (a *Agent) HandleTranslations(c *gin.Context) {
+	lang := c.Param("lang")
+	if lang == "" {
+		lang = a.config.DefaultLang
+	}
+
+	// Return available translations or specific locale
+	c.JSON(http.StatusOK, gin.H{
+		"available_locales": a.i18n.GetAvailableLocales(),
+		"current_locale":    lang,
+	})
+}
+
+// Response models with translated fields
+type TranslatedWeatherResponse struct {
+	*WeatherResponse
+	Translations map[string]string `json:"translations,omitempty"`
+}
 )
 
 // Configuration
