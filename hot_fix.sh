@@ -2,7 +2,81 @@
 #!/bin/bash
 # Cyberzilla Weather System Hotfix Script
 # This script applies all i18n and models package updates
+# Create README with update instructions
+create_readme() {
+    log_info "Creating update documentation..."
+    
+    cat > HOTFIX_README.md << 'HOTFIX_EOF'
+# Hotfix Update - i18n and Models Package
 
+This hotfix adds internationalization (i18n) support and a structured models package to the Cyberzilla Weather System.
+
+## Changes Made
+
+### 1. New Packages
+- internal/i18n/ - Internationalization package
+- pkg/models/ - Structured data models  
+- configs/locales/ - Translation files
+
+### 2. Features Added
+- Multi-language support (English & Persian)
+- Structured data models for better maintainability
+- Standardized API responses
+- RTL language support (Persian/Arabic)
+
+### 3. Updated Files
+- cmd/weather/main.go - Integrated i18n and models
+- static/index.html - Added i18n attributes
+
+## Usage
+
+### Changing Language
+The language can be toggled between English and Persian using the language button in the header.
+
+### Adding New Languages
+1. Create new locale file in configs/locales/ (e.g., es.json)
+2. Add translations using the same keys as en.json
+3. Update the language toggle logic in HTML if needed
+
+### Environment Variables
+Copy and customize:
+cp .env.example .env
+
+Required variables:
+WEATHER_API_KEY=your_api_key_here
+PORT=8080
+
+## API Changes
+
+### New Endpoint
+- GET /api/v1/translations/:lang - Get available translations
+
+### Updated Responses
+All API responses now follow the standard format:
+{
+  "success": true,
+  "data": {...},
+  "error": "",
+  "message": "",
+  "timestamp": "2023-01-01T00:00:00Z"
+}
+
+## Building and Running
+
+Build the application:
+go build -o weather-app ./cmd/weather
+
+Run the application:
+./weather-app
+
+Or run directly:
+go run ./cmd/weather
+
+The application will be available at http://localhost:8080
+HOTFIX_EOF
+
+    log_success "Documentation created: HOTFIX_README.md"
+}
 set -e  # Exit on any error
 
 # Colors for output
