@@ -715,4 +715,246 @@
                 </div>
 
                 <!-- Hunt Times -->
-                <div class="car
+        
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="card-icon">🎯</span>
+                            <span data-en="Hunt Times" data-fa="زمان‌های شکار">Hunt Times</span>
+                        </div>
+                    </div>
+                    <div class="hunt-periods" id="huntTimes"></div>
+                </div>
+
+                <!-- Weather Alerts -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="card-icon">⚠️</span>
+                            <span data-en="Weather Alerts" data-fa="هشدارهای آب و هوا">Weather Alerts</span>
+                        </div>
+                    </div>
+                    <div id="weatherAlerts"></div>
+                </div>
+
+                <!-- IP Information -->
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">
+                            <span class="card-icon">🌐</span>
+                            <span data-en="IP Information" data-fa="اطلاعات IP">IP Information</span>
+                        </div>
+                    </div>
+                    <div class="ip-grid" id="ipInfo"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p data-en="Powered by Cyberzilla Systems" data-fa="قدرت گرفته توسط سایبرزیلا سیستمز">
+                Powered by Cyberzilla Systems
+            </p>
+            <p>📧 <a href="mailto:cyberzilla.systems@gmail.com">cyberzilla.systems@gmail.com</a></p>
+        </div>
+    </div>
+
+    <script>
+        // Language management
+        let currentLang = 'en';
+        
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'fa' : 'en';
+            document.body.classList.toggle('rtl', currentLang === 'fa');
+            updateTexts();
+        }
+        
+        function updateTexts() {
+            document.querySelectorAll('[data-en]').forEach(element => {
+                element.textContent = element.getAttribute(`data-${currentLang}`);
+            });
+            
+            // Update placeholder
+            const searchInput = document.getElementById('searchInput');
+            searchInput.placeholder = searchInput.getAttribute(`data-placeholder-${currentLang}`);
+        }
+        
+        // Particle background
+        function createParticles() {
+            const particles = document.getElementById('particles');
+            for (let i = 0; i < 50; i++) {
+                const particle = document.createElement('div');
+                particle.className = 'particle';
+                particle.style.left = `${Math.random() * 100}%`;
+                particle.style.top = `${Math.random() * 100}%`;
+                particle.style.animationDelay = `${Math.random() * 10}s`;
+                particles.appendChild(particle);
+            }
+        }
+        
+        // API functions
+        async function fetchWeather(location) {
+            showLoading();
+            hideError();
+            
+            try {
+                const response = await fetch(`/api/v1/weather?location=${encodeURIComponent(location)}`);
+                if (!response.ok) throw new Error('Weather data not found');
+                
+                const data = await response.json();
+                displayWeather(data);
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        async function getIPLocation() {
+            showLoading();
+            try {
+                const response = await fetch('/api/v1/ip?ip=auto');
+                const data = await response.json();
+                await fetchWeather(`${data.city}, ${data.country}`);
+            } catch (error) {
+                showError('Could not get your location');
+            } finally {
+                hideLoading();
+            }
+        }
+        
+        // Display functions
+        function displayWeather(data) {
+            document.getElementById('weatherContent').classList.remove('hidden');
+            
+            // Location and current weather
+            document.getElementById('locationName').textContent = 
+                `${data.location.name}, ${data.location.country}`;
+            document.getElementById('currentTemp').textContent = `${Math.round(data.current.temp_c)}°C`;
+            document.getElementById('weatherCondition').textContent = data.current.condition.text;
+            
+            // Weather details
+            const detailsHtml = `
+                <div class="detail-item">
+                    <div class="detail-label" data-en="Feels Like" data-fa="احساس واقعی">Feels Like</div>
+                    <div class="detail-value">${Math.round(data.current.feels_like)}°C</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label" data-en="Humidity" data-fa="رطوبت">Humidity</div>
+                    <div class="detail-value">${data.current.humidity}%</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label" data-en="Wind" data-fa="باد">Wind</div>
+                    <div class="detail-value">${data.current.wind_kph} km/h</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label" data-en="Visibility" data-fa="دید">Visibility</div>
+                    <div class="detail-value">${data.current.visibility} km</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label" data-en="UV Index" data-fa="شاخص UV">UV Index</div>
+                    <div class="detail-value">${data.current.uv}</div>
+                </div>
+            `;
+            document.getElementById('weatherDetails').innerHTML = detailsHtml;
+            
+            // Update other sections (forecast, astronomy, etc.)
+            updateForecast(data.forecast.days);
+            updateAstronomy(data.astronomy);
+            updateAirQuality(data.air_quality);
+            updatePrayerTimes(data.prayer_times);
+            updateHuntTimes(data.hunt_times);
+            updateAlerts(data.alerts);
+            
+            updateTexts(); // Refresh texts for current language
+        }
+        
+        function updateForecast(days) {
+            const forecastGrid = document.getElementById('forecastGrid');
+            forecastGrid.innerHTML = days.slice(0, 7).map(day => `
+                <div class="forecast-day">
+                    <div class="forecast-date">${new Date(day.date).toLocaleDateString(currentLang === 'fa' ? 'fa-IR' : 'en-US', { weekday: 'short' })}</div>
+                    <div class="forecast-icon">🌤️</div>
+                    <div class="forecast-temp">${Math.round(day.day.maxtemp_c)}°</div>
+                    <div style="font-size: 0.8em; color: var(--text-secondary);">${Math.round(day.day.mintemp_c)}°</div>
+                </div>
+            `).join('');
+        }
+        
+        function updateAstronomy(astro) {
+            document.getElementById('astroGrid').innerHTML = `
+                <div class="astro-item">
+                    <div class="astro-icon">🌅</div>
+                    <div class="astro-info">
+                        <h4 data-en="Sunrise" data-fa="طلوع آفتاب">Sunrise</h4>
+                        <p>${astro.sunrise}</p>
+                    </div>
+                </div>
+                <div class="astro-item">
+                    <div class="astro-icon">🌇</div>
+                    <div class="astro-info">
+                        <h4 data-en="Sunset" data-fa="غروب آفتاب">Sunset</h4>
+                        <p>${astro.sunset}</p>
+                    </div>
+                </div>
+                <div class="astro-item">
+                    <div class="astro-icon">🌙</div>
+                    <div class="astro-info">
+                        <h4 data-en="Moon Phase" data-fa="فاز ماه">Moon Phase</h4>
+                        <p>${astro.moon_phase}</p>
+                    </div>
+                </div>
+                <div class="astro-item">
+                    <div class="astro-icon">💫</div>
+                    <div class="astro-info">
+                        <h4 data-en="Moon Illumination" data-fa="روشنایی ماه">Moon Illumination</h4>
+                        <p>${astro.moon_illum}%</p>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Add similar update functions for other sections...
+        
+        // Utility functions
+        function showLoading() {
+            document.getElementById('loading').style.display = 'block';
+        }
+        
+        function hideLoading() {
+            document.getElementById('loading').style.display = 'none';
+        }
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.classList.remove('hidden');
+        }
+        
+        function hideError() {
+            document.getElementById('errorMessage').classList.add('hidden');
+        }
+        
+        function searchWeather() {
+            const location = document.getElementById('searchInput').value.trim();
+            if (location) {
+                fetchWeather(location);
+            }
+        }
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                searchWeather();
+            }
+        }
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            createParticles();
+            updateTexts();
+            // Auto-detect location on load
+            getIPLocation();
+        });
+    </script>
+</body>
+</html>
