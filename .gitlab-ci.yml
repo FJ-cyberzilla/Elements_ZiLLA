@@ -1,0 +1,763 @@
+# .gitlab-ci.yml - GitLab CI/CD Pipeline
+# Cyberzilla Weather System
+# cyberzilla.systems@gmail.com
+
+image: golang:1.21
+
+stages:
+  - test
+  - build
+  - security
+  - deploy
+
+variables:
+  GO111MODULE: "on"
+  CGO_ENABLED: "1"
+  DOCKER_IMAGE: "registry.gitlab.com/$CI_PROJECT_PATH"
+
+# Cache Go modules
+cache:
+  paths:
+    - /go/pkg/mod
+
+before_script:
+  - apt-get update -qq
+  - apt-get install -y -qq sqlite3 gcc
+
+# Run tests
+test:
+  stage: test
+  script:
+    - go mod download
+    - go test -v -race -coverprofile=coverage.out ./...
+    - go tool cover -func=coverage.out
+  coverage: '/total:.*?(\d+\.\d+)%/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.out
+    paths:
+      - coverage.out
+    expire_in: 1 week
+
+# Lint code
+lint:
+  stage: test
+  image: golangci/golangci-lint:latest
+  script:
+    - golangci-lint run --timeout=5m
+
+# Build binary
+build:linux:
+  stage: build
+  script:
+    - CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o weather-app-linux-amd64 .
+    - CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -o weather-app-linux-arm64 .
+  artifacts:
+    paths:
+      - weather-app-*
+    expire_in: 1 month
+
+build:docker:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $DOCKER_IMAGE:$CI_COMMIT_SHA -t $DOCKER_IMAGE:latest .
+    - docker push $DOCKER_IMAGE:$CI_COMMIT_SHA
+    - docker push $DOCKER_IMAGE:latest
+  only:
+    - main
+    - tags
+
+# Security scanning
+security:gosec:
+  stage: security
+  image: securego/gosec:latest
+  script:
+    - gosec -fmt json -out gosec-report.json ./...
+  artifacts:
+    reports:
+      sast: gosec-report.json
+    expire_in: 1 week
+  allow_failure: true
+
+security:trivy:
+  stage: security
+  image: aquasec/trivy:latest
+  script:
+    - trivy image --exit-code 0 --severity HIGH,CRITICAL $DOCKER_IMAGE:latest
+  only:
+    - main
+  allow_failure: true
+
+# Deploy to staging
+deploy:staging:
+  stage: deploy
+  environment:
+    name: staging
+    url: https://staging.weather.cyberzilla.systems
+  script:
+    - echo "Deploying to staging..."
+    - |
+      ssh $STAGING_USER@$STAGING_HOST << 'EOF'
+        cd /opt/weather-app
+        docker-compose pull
+        docker-compose up -d
+      EOF
+  only:
+    - develop
+
+# Deploy to production
+deploy:production:
+  stage: deploy
+  environment:
+    name: production
+    url: https://weather.cyberzilla.systems
+  script:
+    - echo "Deploying to production..."
+    - |
+      ssh $PROD_USER@$PROD_HOST << 'EOF'
+        cd /opt/weather-app
+        docker-compose pull
+        docker-compose up -d
+        docker system prune -f
+      EOF
+  only:
+    - main
+    - tags
+  when: manual
+
+---
+# Jenkinsfile - Jenkins Pipeline
+// Cyberzilla Weather System
+// cyberzilla.systems@gmail.com
+
+pipeline {
+    agent any
+    
+    environment {
+        GO_VERSION = '1.21'
+        CGO_ENABLED = '1'
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_IMAGE = 'cyberzilla/weather-app'
+        DOCKER_CREDENTIALS = credentials('docker-hub-credentials')
+        WEATHER_API_KEY = credentials('weather-api-key')
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                sh 'git clean -fdx'
+            }
+        }
+        
+        stage('Setup') {
+            steps {
+                sh '''
+                    apt-get update
+                    apt-get install -y golang-${GO_VERSION} sqlite3 gcc
+                    go version
+                '''
+            }
+        }
+        
+        stage('Dependencies') {
+            steps {
+                sh 'go mod download'
+                sh 'go mod verify'
+            }
+        }
+        
+        stage('Lint') {
+            steps {
+                sh '''
+                    curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+                    golangci-lint run --timeout=5m
+                '''
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh 'go test -v -race -coverprofile=coverage.out ./...'
+                sh 'go tool cover -html=coverage.out -o coverage.html'
+            }
+            post {
+                always {
+                    publishHTML([
+                        allowMissing: false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll: true,
+                        reportDir: '.',
+                        reportFiles: 'coverage.html',
+                        reportName: 'Coverage Report'
+                    ])
+                    junit 'test-results.xml'
+                }
+            }
+        }
+        
+        stage('Security Scan') {
+            parallel {
+                stage('Gosec') {
+                    steps {
+                        sh '''
+                            go install github.com/securego/gosec/v2/cmd/gosec@latest
+                            gosec -fmt json -out gosec-report.json ./...
+                        '''
+                    }
+                }
+                stage('Dependency Check') {
+                    steps {
+                        sh 'go list -json -m all | nancy sleuth'
+                    }
+                }
+            }
+        }
+        
+        stage('Build') {
+            parallel {
+                stage('Linux AMD64') {
+                    steps {
+                        sh 'GOOS=linux GOARCH=amd64 go build -o weather-app-linux-amd64 .'
+                    }
+                }
+                stage('Linux ARM64') {
+                    steps {
+                        sh 'GOOS=linux GOARCH=arm64 go build -o weather-app-linux-arm64 .'
+                    }
+                }
+                stage('Windows AMD64') {
+                    steps {
+                        sh 'GOOS=windows GOARCH=amd64 go build -o weather-app-windows.exe .'
+                    }
+                }
+                stage('Darwin AMD64') {
+                    steps {
+                        sh 'GOOS=darwin GOARCH=amd64 go build -o weather-app-darwin-amd64 .'
+                    }
+                }
+            }
+        }
+        
+        stage('Docker Build') {
+            when {
+                anyOf {
+                    branch 'main'
+                    branch 'develop'
+                    tag '*'
+                }
+            }
+            steps {
+                script {
+                    def imageName = "${DOCKER_REGISTRY}/${DOCKER_IMAGE}"
+                    def imageTag = env.BRANCH_NAME == 'main' ? 'latest' : env.BRANCH_NAME
+                    
+                    docker.build("${imageName}:${imageTag}")
+                    
+                    docker.withRegistry('', 'docker-hub-credentials') {
+                        docker.image("${imageName}:${imageTag}").push()
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to Staging') {
+            when {
+                branch 'develop'
+            }
+            steps {
+                sshagent(['staging-ssh-key']) {
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no ${STAGING_USER}@${STAGING_HOST} << 'EOF'
+                            cd /opt/weather-app
+                            docker-compose pull
+                            docker-compose up -d
+                        EOF
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy to Production') {
+            when {
+                anyOf {
+                    branch 'main'
+                    tag '*'
+                }
+            }
+            steps {
+                input message: 'Deploy to Production?', ok: 'Deploy'
+                
+                sshagent(['production-ssh-key']) {
+                    sh '''
+                        ssh -o StrictHostKeyChecking=no ${PROD_USER}@${PROD_HOST} << 'EOF'
+                            cd /opt/weather-app
+                            docker-compose pull
+                            docker-compose up -d
+                            docker system prune -f
+                        EOF
+                    '''
+                }
+                
+                // Health check
+                sh 'sleep 10'
+                sh 'curl -f https://weather.cyberzilla.systems/api/v1/health'
+            }
+        }
+        
+        stage('Performance Test') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    go test -bench=. -benchmem -run=^$ ./... > benchmark.txt
+                    cat benchmark.txt
+                '''
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+            emailext (
+                subject: "SUCCESS: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                body: """
+                    <p>Build succeeded!</p>
+                    <p>Job: ${env.JOB_NAME}</p>
+                    <p>Build: ${env.BUILD_NUMBER}</p>
+                    <p>URL: ${env.BUILD_URL}</p>
+                """,
+                to: 'cyberzilla.systems@gmail.com',
+                mimeType: 'text/html'
+            )
+        }
+        failure {
+            echo 'Pipeline failed!'
+            emailext (
+                subject: "FAILURE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]'",
+                body: """
+                    <p>Build failed!</p>
+                    <p>Job: ${env.JOB_NAME}</p>
+                    <p>Build: ${env.BUILD_NUMBER}</p>
+                    <p>URL: ${env.BUILD_URL}</p>
+                    <p>Please check the logs.</p>
+                """,
+                to: 'cyberzilla.systems@gmail.com',
+                mimeType: 'text/html'
+            )
+        }
+        always {
+            // Archive artifacts
+            archiveArtifacts artifacts: 'weather-app-*', fingerprint: true
+            
+            // Clean workspace
+            cleanWs()
+        }
+    }
+}
+
+---
+# .circleci/config.yml - CircleCI Pipeline
+# Cyberzilla Weather System
+# cyberzilla.systems@gmail.com
+
+version: 2.1
+
+orbs:
+  go: circleci/go@1.9
+  docker: circleci/docker@2.2
+
+executors:
+  go-executor:
+    docker:
+      - image: cimg/go:1.21
+    environment:
+      CGO_ENABLED: 1
+      GO111MODULE: on
+
+jobs:
+  test:
+    executor: go-executor
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y sqlite3 gcc
+      - go/load-cache
+      - go/mod-download
+      - go/save-cache
+      - run:
+          name: Run Tests
+          command: |
+            go test -v -race -coverprofile=coverage.out ./...
+            go tool cover -html=coverage.out -o coverage.html
+      - run:
+          name: Upload Coverage
+          command: |
+            bash <(curl -s https://codecov.io/bash)
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: coverage.html
+
+  lint:
+    executor: go-executor
+    steps:
+      - checkout
+      - run:
+          name: Run Linter
+          command: |
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+            golangci-lint run --timeout=5m
+
+  security-scan:
+    executor: go-executor
+    steps:
+      - checkout
+      - run:
+          name: Gosec Security Scan
+          command: |
+            go install github.com/securego/gosec/v2/cmd/gosec@latest
+            gosec -fmt json -out gosec-report.json ./...
+      - store_artifacts:
+          path: gosec-report.json
+
+  build:
+    executor: go-executor
+    steps:
+      - checkout
+      - run:
+          name: Install Build Dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y gcc sqlite3
+      - go/mod-download
+      - run:
+          name: Build Binaries
+          command: |
+            mkdir -p dist
+            GOOS=linux GOARCH=amd64 go build -o dist/weather-app-linux-amd64 .
+            GOOS=linux GOARCH=arm64 go build -o dist/weather-app-linux-arm64 .
+            GOOS=darwin GOARCH=amd64 go build -o dist/weather-app-darwin-amd64 .
+            GOOS=darwin GOARCH=arm64 go build -o dist/weather-app-darwin-arm64 .
+            GOOS=windows GOARCH=amd64 go build -o dist/weather-app-windows.exe .
+      - persist_to_workspace:
+          root: dist
+          paths:
+            - weather-app-*
+      - store_artifacts:
+          path: dist
+
+  build-docker:
+    executor: docker/docker
+    steps:
+      - checkout
+      - setup_remote_docker:
+          version: 20.10.14
+      - docker/check
+      - docker/build:
+          image: cyberzilla/weather-app
+          tag: ${CIRCLE_SHA1},latest
+      - docker/push:
+          image: cyberzilla/weather-app
+          tag: ${CIRCLE_SHA1},latest
+
+  benchmark:
+    executor: go-executor
+    steps:
+      - checkout
+      - run:
+          name: Install Dependencies
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y gcc sqlite3
+      - go/mod-download
+      - run:
+          name: Run Benchmarks
+          command: |
+            go test -bench=. -benchmem -run=^$ ./... | tee benchmark.txt
+      - store_artifacts:
+          path: benchmark.txt
+
+  deploy-staging:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - add_ssh_keys:
+          fingerprints:
+            - "SO:ME:FIN:GER:PR:IN:T"
+      - run:
+          name: Deploy to Staging
+          command: |
+            ssh -o StrictHostKeyChecking=no $STAGING_USER@$STAGING_HOST << 'EOF'
+              cd /opt/weather-app
+              docker-compose pull
+              docker-compose up -d
+            EOF
+
+  deploy-production:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - add_ssh_keys:
+          fingerprints:
+            - "SO:ME:FIN:GER:PR:IN:T"
+      - run:
+          name: Deploy to Production
+          command: |
+            ssh -o StrictHostKeyChecking=no $PROD_USER@$PROD_HOST << 'EOF'
+              cd /opt/weather-app
+              docker-compose pull
+              docker-compose up -d
+              docker system prune -f
+            EOF
+      - run:
+          name: Health Check
+          command: |
+            sleep 10
+            curl -f https://weather.cyberzilla.systems/api/v1/health
+
+workflows:
+  version: 2
+  build-test-deploy:
+    jobs:
+      - test
+      - lint
+      - security-scan
+      - build:
+          requires:
+            - test
+            - lint
+      - build-docker:
+          requires:
+            - build
+          filters:
+            branches:
+              only:
+                - main
+                - develop
+      - benchmark:
+          requires:
+            - test
+          filters:
+            branches:
+              only: main
+      - deploy-staging:
+          requires:
+            - build-docker
+          filters:
+            branches:
+              only: develop
+      - hold-production:
+          type: approval
+          requires:
+            - build-docker
+          filters:
+            branches:
+              only: main
+      - deploy-production:
+          requires:
+            - hold-production
+          filters:
+            branches:
+              only: main
+
+---
+# azure-pipelines.yml - Azure DevOps Pipeline
+# Cyberzilla Weather System
+# cyberzilla.systems@gmail.com
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  tags:
+    include:
+      - v*
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  GO_VERSION: '1.21'
+  CGO_ENABLED: '1'
+  GOPATH: '$(system.defaultWorkingDirectory)/gopath'
+  modulePath: '$(GOPATH)/src/github.com/$(build.repository.name)'
+
+stages:
+- stage: Test
+  displayName: 'Test Stage'
+  jobs:
+  - job: UnitTests
+    displayName: 'Run Unit Tests'
+    steps:
+    - task: GoTool@0
+      inputs:
+        version: '$(GO_VERSION)'
+    
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y gcc sqlite3
+      displayName: 'Install Dependencies'
+    
+    - script: |
+        go mod download
+        go mod verify
+      displayName: 'Download Go Modules'
+    
+    - script: |
+        go test -v -race -coverprofile=coverage.out ./...
+        go tool cover -html=coverage.out -o coverage.html
+      displayName: 'Run Tests'
+    
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'JUnit'
+        testResultsFiles: '**/test-results.xml'
+        failTaskOnFailedTests: true
+      displayName: 'Publish Test Results'
+    
+    - task: PublishCodeCoverageResults@1
+      inputs:
+        codeCoverageTool: 'Cobertura'
+        summaryFileLocation: 'coverage.out'
+        reportDirectory: '.'
+      displayName: 'Publish Coverage'
+
+  - job: Lint
+    displayName: 'Code Linting'
+    steps:
+    - task: GoTool@0
+      inputs:
+        version: '$(GO_VERSION)'
+    
+    - script: |
+        curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
+        golangci-lint run --timeout=5m
+      displayName: 'Run Linter'
+
+  - job: SecurityScan
+    displayName: 'Security Scanning'
+    steps:
+    - task: GoTool@0
+      inputs:
+        version: '$(GO_VERSION)'
+    
+    - script: |
+        go install github.com/securego/gosec/v2/cmd/gosec@latest
+        gosec -fmt json -out gosec-report.json ./...
+      displayName: 'Run Gosec'
+    
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathToPublish: 'gosec-report.json'
+        artifactName: 'security-report'
+      displayName: 'Publish Security Report'
+
+- stage: Build
+  displayName: 'Build Stage'
+  dependsOn: Test
+  jobs:
+  - job: BuildBinaries
+    displayName: 'Build Binaries'
+    strategy:
+      matrix:
+        Linux_AMD64:
+          GOOS: 'linux'
+          GOARCH: 'amd64'
+        Linux_ARM64:
+          GOOS: 'linux'
+          GOARCH: 'arm64'
+        Darwin_AMD64:
+          GOOS: 'darwin'
+          GOARCH: 'amd64'
+        Windows_AMD64:
+          GOOS: 'windows'
+          GOARCH: 'amd64'
+    steps:
+    - task: GoTool@0
+      inputs:
+        version: '$(GO_VERSION)'
+    
+    - script: |
+        sudo apt-get update
+        sudo apt-get install -y gcc sqlite3
+      displayName: 'Install Dependencies'
+    
+    - script: |
+        go mod download
+      displayName: 'Download Modules'
+    
+    - script: |
+        export GOOS=$(GOOS)
+        export GOARCH=$(GOARCH)
+        BINARY_NAME="weather-app-$(GOOS)-$(GOARCH)"
+        if [ "$(GOOS)" = "windows" ]; then
+          BINARY_NAME="${BINARY_NAME}.exe"
+        fi
+        go build -o ${BINARY_NAME} .
+      displayName: 'Build Binary'
+    
+    - task: PublishBuildArtifacts@1
+      inputs:
+        pathToPublish: 'weather-app-*'
+        artifactName: 'binaries'
+      displayName: 'Publish Artifacts'
+
+  - job: BuildDocker
+    displayName: 'Build Docker Image'
+    condition: or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.SourceBranch'], 'refs/heads/develop'))
+    steps:
+    - task: Docker@2
+      inputs:
+        containerRegistry: 'DockerHub'
+        repository: 'cyberzilla/weather-app'
+        command: 'buildAndPush'
+        Dockerfile: '**/Dockerfile'
+        tags: |
+          $(Build.SourceVersion)
+          latest
+      displayName: 'Build and Push Docker Image'
+
+- stage: Deploy
+  displayName: 'Deploy Stage'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - deployment: DeployStaging
+    displayName: 'Deploy to Staging'
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/develop')
+    environment: 'staging'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: SSH@0
+            inputs:
+              sshEndpoint: 'Staging Server'
+              runOptions: 'commands'
+              commands: |
+                cd /opt/weather-app
+                docker-compose pull
+                docker-compose up -d
+            displayName: 'Deploy to Sta
