@@ -1,6 +1,5 @@
-"EOF"
+<< 'EOF'
 #!/bin/bash
-
 # Cyberzilla Weather System Hotfix Script
 # This script applies all i18n and models package updates
 
